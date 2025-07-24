@@ -1,0 +1,105 @@
+pipeline {
+  agent any
+
+  parameters {
+    choice(name: 'CLOUD_PROVIDER', choices: ['aws', 'gcp', 'alibaba'], description: 'Choose Cloud Provider')
+  }
+
+  environment {
+    IMAGE_TAG = 'latest'
+    ECR_REPO = '471112811957.dkr.ecr.us-east-1.amazonaws.com/hello-eyego'
+    AWS_REGION = 'us-east-1'
+    CLUSTER_NAME = 'hello-eyego-cluster'
+    GCP_PROJECT = 'your-gcp-project-id'
+    ALIBABA_REGISTRY = 'registry.cn-hangzhou.aliyuncs.com/hassan90122/hello-eyego'
+  }
+
+  stages {
+
+    stage('GitHub Pull') {
+      steps {
+        git 'https://github.com/hassan90122/hello-eyego.git'
+      }
+    }
+
+    stage('Build Docker Image') {
+      steps {
+        script {
+          dockerImage = docker.build("hello-eyego:${IMAGE_TAG}")
+        }
+      }
+    }
+
+    stage('Authenticate and Push Image') {
+      steps {
+        script {
+          if (params.CLOUD_PROVIDER == 'aws') {
+            withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+              sh '''
+                aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+                aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+                aws configure set default.region $AWS_REGION
+
+                aws ecr get-login-password | docker login --username AWS --password-stdin $ECR_REPO
+                docker tag hello-eyego:$IMAGE_TAG $ECR_REPO:$IMAGE_TAG
+                docker push $ECR_REPO:$IMAGE_TAG
+              '''
+            }
+          } else if (params.CLOUD_PROVIDER == 'gcp') {
+            sh '''
+              gcloud auth configure-docker
+              docker tag hello-eyego:$IMAGE_TAG gcr.io/$GCP_PROJECT/hello-eyego:$IMAGE_TAG
+              docker push gcr.io/$GCP_PROJECT/hello-eyego:$IMAGE_TAG
+            '''
+          } else if (params.CLOUD_PROVIDER == 'alibaba') {
+            withCredentials([usernamePassword(credentialsId: 'alibaba-credentials', usernameVariable: 'ALI_USER', passwordVariable: 'ALI_PASS')]) {
+              sh '''
+                docker login --username=$ALI_USER --password=$ALI_PASS registry.cn-hangzhou.aliyuncs.com
+                docker tag hello-eyego:$IMAGE_TAG $ALIBABA_REGISTRY:$IMAGE_TAG
+                docker push $ALIBABA_REGISTRY:$IMAGE_TAG
+              '''
+            }
+          }
+        }
+      }
+    }
+
+    stage('Deploy to Kubernetes') {
+      steps {
+        script {
+          if (params.CLOUD_PROVIDER == 'aws') {
+            withCredentials([usernamePassword(credentialsId: 'aws-credentials', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+              sh '''
+                aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+                aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+                aws configure set default.region $AWS_REGION
+                aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
+
+                kubectl apply -f deployment.yaml
+                kubectl apply -f service2.yaml
+                kubectl apply -f ingress.yaml
+              '''
+            }
+          } else if (params.CLOUD_PROVIDER == 'gcp') {
+            sh '''
+              gcloud container clusters get-credentials hello-eyego-cluster --zone us-central1-c --project $GCP_PROJECT
+
+              kubectl apply -f deployment.yaml
+              kubectl apply -f service2.yaml
+              kubectl apply -f ingress.yaml
+            '''
+          } else if (params.CLOUD_PROVIDER == 'alibaba') {
+            sh '''
+              # Replace this with Alibaba Cloud CLI configuration and connection to ACK
+              echo "Alibaba Cloud ACK deployment - implement as needed"
+              kubectl apply -f deployment.yaml
+              kubectl apply -f service2.yaml
+              kubectl apply -f ingress.yaml
+            '''
+          }
+        }
+      }
+    }
+
+  }
+}
